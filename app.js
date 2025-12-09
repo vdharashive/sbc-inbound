@@ -91,6 +91,45 @@ const {getRtpEngine, setRtpEngines} = require('@jambonz/rtpengine-utils')([], lo
   dtmfListenPort: process.env.DTMF_LISTEN_PORT || 22224,
   protocol: ngProtocol
 });
+// Helper function to sanitize alert data for InfluxDB line protocol
+function sanitizeAlertData(data) {
+  const sanitized = { ...data };
+
+  // Sanitize fields to remove special characters that break InfluxDB line protocol
+  if (sanitized.fields) {
+    sanitized.fields = { ...sanitized.fields };
+
+    // Sanitize detail field - remove quotes, backslashes, newlines, and limit length
+    if (sanitized.fields.detail) {
+      sanitized.fields.detail = sanitized.fields.detail
+        .replace(/"/g, "'")      // Replace double quotes with single quotes
+        .replace(/\\/g, '')      // Remove backslashes
+        .replace(/\n/g, ' ')     // Replace newlines with spaces
+        .replace(/\r/g, ' ')     // Replace carriage returns with spaces
+        .replace(/\t/g, ' ')     // Replace tabs with spaces
+        .substring(0, 200);      // Limit length to prevent overflow
+    }
+
+    // Sanitize host field
+    if (sanitized.fields.host) {
+      sanitized.fields.host = sanitized.fields.host
+        .replace(/"/g, "'")
+        .replace(/\\/g, '')
+        .substring(0, 50);
+    }
+
+    // Sanitize error_type field
+    if (sanitized.fields.error_type) {
+      sanitized.fields.error_type = sanitized.fields.error_type
+        .replace(/"/g, "'")
+        .replace(/\\/g, '')
+        .substring(0, 50);
+    }
+  }
+
+  return sanitized;
+}
+
 // Configure SRF locals with monitoring and utility functions
 srf.locals = {...srf.locals,
   stats,
@@ -154,14 +193,14 @@ const activeCallIds = srf.locals.activeCallIds;
 // Initialize services and log system startup event for monitoring
 // This alerts the monitoring system that the SBC inbound service has started
 if (writeSystemAlerts) {
-  writeSystemAlerts({
+  writeSystemAlerts(sanitizeAlertData({
     system_component: SBC_INBOUND,
     state : SystemState.Online,
     fields : {
       detail: `sbc-inbound with process_id ${process.pid} started`,
       host: srf.locals?.ipv4
     }
-  });
+  }));
 }
 
 const {
@@ -407,15 +446,15 @@ process.on('uncaughtException', async (err) => {
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
     try {
-      await writeSystemAlerts({
+      await writeSystemAlerts(sanitizeAlertData({
         system_component: SBC_INBOUND,
         state: SystemState.Offline,
         fields: {
-          detail: `sbc-inbound crashed with uncaught exception: ${err.message}, process_id ${process.pid}`,
+          detail: `Uncaught exception in sbc-inbound process ${process.pid}`,
           host: srf.locals?.ipv4,
           error_type: 'uncaught_exception'
         }
-      });
+      }));
     } catch (alertErr) {
       logger.error({alertErr}, 'Failed to write crash alert');
     }
@@ -429,15 +468,15 @@ process.on('unhandledRejection', async (reason, promise) => {
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
     try {
-      await writeSystemAlerts({
+      await writeSystemAlerts(sanitizeAlertData({
         system_component: SBC_INBOUND,
         state: SystemState.Offline,
         fields: {
-          detail: `sbc-inbound crashed with unhandled promise rejection: ${reason}, process_id ${process.pid}`,
+          detail: `Unhandled promise rejection in sbc-inbound process ${process.pid}`,
           host: srf.locals?.ipv4,
           error_type: 'unhandled_rejection'
         }
-      });
+      }));
     } catch (alertErr) {
       logger.error({alertErr}, 'Failed to write crash alert');
     }
@@ -455,14 +494,14 @@ async function handle(removeFromSet, setName, signal) {
   // This alert must be written synchronously to ensure it's recorded before process termination
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
-    await writeSystemAlerts({
+    await writeSystemAlerts(sanitizeAlertData({
       system_component: SBC_INBOUND,
       state : SystemState.Offline,
       fields : {
         detail: `sbc-inbound with process_id ${process.pid} stopped, signal ${signal}`,
         host: srf.locals?.ipv4
       }
-    });
+    }));
   }
   if (srf.locals.privateSipAddress && setName) {
     logger.info(`removing ${srf.locals.privateSipAddress} from set ${setName}`);
