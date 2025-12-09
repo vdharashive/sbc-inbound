@@ -20,6 +20,7 @@ const opts = Object.assign({
   timestamp: () => {return `, "time": "${new Date().toISOString()}"`;}
 }, {level: process.env.JAMBONES_LOGLEVEL || 'info'});
 const logger = require('pino')(opts);
+// Import time-series functions for metrics and system monitoring
 const {
   writeCallCount,
   writeCallCountSP,
@@ -27,7 +28,8 @@ const {
   queryCdrs,
   writeCdrs,
   writeAlerts,
-  AlertType
+  AlertType,
+  writeSystemAlerts  // System lifecycle alerts for monitoring service health
 } = require('@jambonz/time-series')(logger, {
   host: process.env.JAMBONES_TIME_SERIES_HOST,
   port: process.env.JAMBONES_TIME_SERIES_PORT || 8086,
@@ -38,7 +40,9 @@ const StatsCollector = require('@jambonz/stats-collector');
 const CIDRMatcher = require('cidr-matcher');
 const stats = new StatsCollector(logger);
 const {equalsIgnoreOrder, createHealthCheckApp, systemHealth, parseHostPorts} = require('./lib/utils');
-const {LifeCycleEvents} = require('./lib/constants');
+const {LifeCycleEvents, SystemState, SBC_INBOUND} = require('./lib/constants');
+// SystemState: Online/Offline states for system health monitoring
+// SBC_INBOUND: Component identifier for system alerts
 const setNameRtp = `${(process.env.JAMBONES_CLUSTER_ID || 'default')}:active-rtp`;
 const rtpServers = [];
 const setName = `${(process.env.JAMBONES_CLUSTER_ID || 'default')}:active-sip`;
@@ -87,6 +91,7 @@ const {getRtpEngine, setRtpEngines} = require('@jambonz/rtpengine-utils')([], lo
   dtmfListenPort: process.env.DTMF_LISTEN_PORT || 22224,
   protocol: ngProtocol
 });
+// Configure SRF locals with monitoring and utility functions
 srf.locals = {...srf.locals,
   stats,
   writeCallCount,
@@ -96,6 +101,7 @@ srf.locals = {...srf.locals,
   writeCdrs,
   writeAlerts,
   AlertType,
+  writeSystemAlerts,  // System lifecycle alerts for health monitoring
   activeCallIds: new Map(),
   getRtpEngine,
   privateNetworkCidr: process.env.PRIVATE_VOIP_NETWORK_CIDR || null,
@@ -144,6 +150,19 @@ srf.locals = {
   lookupAuthCarriersForAccountAndSP
 };
 const activeCallIds = srf.locals.activeCallIds;
+
+// Initialize services and log system startup event for monitoring
+// This alerts the monitoring system that the SBC inbound service has started
+if (writeSystemAlerts) {
+  writeSystemAlerts({
+    system_component: SBC_INBOUND,
+    state : SystemState.Online,
+    fields : {
+      detail: `sbc-inbound with process_id ${process.pid} started`,
+      host: srf.locals?.ipv4
+    }
+  });
+}
 
 const {
   initLocals,
@@ -376,11 +395,75 @@ setInterval(async() => {
   }
 }, 20000);
 
+// Register signal handlers for graceful shutdown and system alerts
+// SIGTERM: Standard termination signal from init systems/process managers
+// SIGUSR2: User-defined signal, often used for graceful restarts
 process.on('SIGUSR2', handle.bind(null, removeFromSet, setName));
 process.on('SIGTERM', handle.bind(null, removeFromSet, setName));
 
-function handle(removeFromSet, setName, signal) {
-  logger.info(`got signal ${signal}`);
+// Crash monitoring - handles uncaught exceptions and unhandled promise rejections
+process.on('uncaughtException', async (err) => {
+  logger.error({err}, 'Uncaught exception - application crashed');
+  const writeSystemAlerts = srf.locals?.writeSystemAlerts;
+  if (writeSystemAlerts) {
+    try {
+      await writeSystemAlerts({
+        system_component: SBC_INBOUND,
+        state: SystemState.Offline,
+        fields: {
+          detail: `sbc-inbound crashed with uncaught exception: ${err.message}, process_id ${process.pid}`,
+          host: srf.locals?.ipv4,
+          error_type: 'uncaught_exception'
+        }
+      });
+    } catch (alertErr) {
+      logger.error({alertErr}, 'Failed to write crash alert');
+    }
+  }
+  // Give a moment for alert to be written before exiting
+  setTimeout(() => process.exit(1), 100);
+});
+
+process.on('unhandledRejection', async (reason, promise) => {
+  logger.error({reason, promise}, 'Unhandled promise rejection - application crashed');
+  const writeSystemAlerts = srf.locals?.writeSystemAlerts;
+  if (writeSystemAlerts) {
+    try {
+      await writeSystemAlerts({
+        system_component: SBC_INBOUND,
+        state: SystemState.Offline,
+        fields: {
+          detail: `sbc-inbound crashed with unhandled promise rejection: ${reason}, process_id ${process.pid}`,
+          host: srf.locals?.ipv4,
+          error_type: 'unhandled_rejection'
+        }
+      });
+    } catch (alertErr) {
+      logger.error({alertErr}, 'Failed to write crash alert');
+    }
+  }
+  // Give a moment for alert to be written before exiting
+  setTimeout(() => process.exit(1), 100);
+});
+
+// Signal handler for graceful shutdown with system alert logging
+// Handles SIGTERM and SIGUSR2 signals for clean service termination
+async function handle(removeFromSet, setName, signal) {
+  logger.info(`received signal ${signal}, initiating graceful shutdown`);
+
+  // Log system shutdown event for monitoring before cleanup
+  // This alert must be written synchronously to ensure it's recorded before process termination
+  const writeSystemAlerts = srf.locals?.writeSystemAlerts;
+  if (writeSystemAlerts) {
+    await writeSystemAlerts({
+      system_component: SBC_INBOUND,
+      state : SystemState.Offline,
+      fields : {
+        detail: `sbc-inbound with process_id ${process.pid} stopped, signal ${signal}`,
+        host: srf.locals?.ipv4
+      }
+    });
+  }
   if (srf.locals.privateSipAddress && setName) {
     logger.info(`removing ${srf.locals.privateSipAddress} from set ${setName}`);
     removeFromSet(setName, srf.locals.privateSipAddress);

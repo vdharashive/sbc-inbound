@@ -8,5 +8,11 @@
     "NoMedia": "no-media",
     "PartialMedia": "partial-media",
     "FullMedia": "full-media"
-  }
+  },
+  "SystemState" : {
+    "Online": "ONLINE",
+    "Offline": "OFFLINE",
+    "GracefulShutdownInProgress":"SHUTDOWN_IN_PROGRESS"
+  },
+  "SBC_INBOUND" : "sbc-inbound"
 }
