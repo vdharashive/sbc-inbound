@@ -36,7 +36,7 @@
     "@jambonz/rtpengine-utils": "^0.4.4",
     "@jambonz/siprec-client-utils": "^0.2.10",
     "@jambonz/stats-collector": "^0.1.10",
-    "@jambonz/time-series": "^0.2.10",
+    "@jambonz/time-series": "^0.2.14",
     "bent": "^7.3.12",
     "cidr-matcher": "^2.1.1",
     "debug": "^4.4.3",
