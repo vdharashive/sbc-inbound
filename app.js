@@ -91,24 +91,6 @@ const {getRtpEngine, setRtpEngines} = require('@jambonz/rtpengine-utils')([], lo
   dtmfListenPort: process.env.DTMF_LISTEN_PORT || 22224,
   protocol: ngProtocol
 });
-// Helper function to ensure alert data is safe for InfluxDB line protocol
-function sanitizeAlertData(data) {
-  const sanitized = { ...data };
-
-  // Ensure fields exist and handle edge cases
-  if (sanitized.fields) {
-    sanitized.fields = { ...sanitized.fields };
-
-    // Ensure host field is always a string (InfluxDB doesn't like undefined)
-    if (sanitized.fields.host === undefined || sanitized.fields.host === null) {
-      sanitized.fields.host = 'unknown';
-    } else {
-      sanitized.fields.host = sanitized.fields.host.toString();
-    }
-  }
-
-  return sanitized;
-}
 
 // Configure SRF locals with monitoring and utility functions
 srf.locals = {...srf.locals,
@@ -173,14 +155,14 @@ const activeCallIds = srf.locals.activeCallIds;
 // Initialize services and log system startup event for monitoring
 // This alerts the monitoring system that the SBC inbound service has started
 if (writeSystemAlerts) {
-  writeSystemAlerts(sanitizeAlertData({
+  writeSystemAlerts({
     system_component: SBC_INBOUND,
     state : SystemState.Online,
     fields : {
       detail: `sbc-inbound with process_id ${process.pid} started`,
-      host: srf.locals?.ipv4
+      host: srf.locals?.ipv4 || 'unknown'
     }
-  }));
+  });
 }
 
 const {
@@ -426,14 +408,14 @@ process.on('uncaughtException', async (err) => {
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
     try {
-      await writeSystemAlerts(sanitizeAlertData({
+      await writeSystemAlerts({
         system_component: SBC_INBOUND,
         state: SystemState.Offline,
         fields: {
           detail: `Uncaught exception in sbc-inbound process ${process.pid}`,
-          host: srf.locals?.ipv4
+          host: srf.locals?.ipv4 || 'unknown'
         }
-      }));
+      });
     } catch (alertErr) {
       logger.error({alertErr}, 'Failed to write crash alert');
     }
@@ -447,14 +429,14 @@ process.on('unhandledRejection', async (reason, promise) => {
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
     try {
-      await writeSystemAlerts(sanitizeAlertData({
+      await writeSystemAlerts({
         system_component: SBC_INBOUND,
         state: SystemState.Offline,
         fields: {
           detail: `Unhandled promise rejection in sbc-inbound process ${process.pid}`,
-          host: srf.locals?.ipv4
+          host: srf.locals?.ipv4 || 'unknown'
         }
-      }));
+      });
     } catch (alertErr) {
       logger.error({alertErr}, 'Failed to write crash alert');
     }
@@ -472,14 +454,14 @@ async function handle(removeFromSet, setName, signal) {
   // This alert must be written synchronously to ensure it's recorded before process termination
   const writeSystemAlerts = srf.locals?.writeSystemAlerts;
   if (writeSystemAlerts) {
-    await writeSystemAlerts(sanitizeAlertData({
+    await writeSystemAlerts({
       system_component: SBC_INBOUND,
       state : SystemState.Offline,
       fields : {
         detail: `sbc-inbound with process_id ${process.pid} stopped, signal ${signal}`,
-        host: srf.locals?.ipv4
+        host: srf.locals?.ipv4 || 'unknown'
       }
-    }));
+    });
   }
   if (srf.locals.privateSipAddress && setName) {
     logger.info(`removing ${srf.locals.privateSipAddress} from set ${setName}`);
